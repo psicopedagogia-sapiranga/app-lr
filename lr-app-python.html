@@ -106,6 +106,7 @@ button,input,select,textarea{font-family:inherit;}
 .bni{display:flex;flex-direction:column;align-items:center;padding:8px 4px 10px;border:none;background:none;color:var(--text3);font-size:.58rem;gap:3px;position:relative;cursor:pointer;}
 .bni svg{width:21px;height:21px;}
 .bni.act{color:var(--blue);}
+.bnav-5 .bni:nth-child(1){order:1}.bnav-5 .bni:nth-child(3){order:2}.bnav-5 .bni:nth-child(2){order:3}.bnav-5 .bni:nth-child(4){order:4}.bnav-5 .bni:nth-child(5){order:5}
 .bni-dot{position:absolute;top:5px;right:calc(50% - 18px);background:var(--danger);color:#fff;font-size:.52rem;padding:1px 5px;border-radius:10px;font-weight:700;}
 
 /* PAGE CONTENT */
@@ -854,10 +855,11 @@ function statusBadge(s) {
   </div><!-- /pcontent -->
 
   <!-- BOTTOM NAV -->
-  <div class="bnav bnav-4">
+  <div class="bnav bnav-5">
     <button class="bni act" id="bn-dash" onclick="tp('t-dash');setBni(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/></svg>Início</button>
     <button class="bni" id="bn-ord" onclick="tp('t-ordens');setBni(this)" style="position:relative"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2"/><rect x="9" y="3" width="6" height="4" rx="2"/></svg>Ordens<span class="bni-dot" id="bn-req-dot" style="display:none">0</span></button>
     <button class="bni" id="bn-cli" onclick="tp('t-clientes');setBni(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/></svg>Clientes</button>
+    <button class="bni" id="bn-agenda" onclick="tp('t-agenda');setBni(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="3"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Agenda</button>
     <button class="bni" id="bn-fin" onclick="tp('t-pagamentos');setBni(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6"/></svg>Financeiro</button>
   </div>
 </div>
@@ -2084,6 +2086,24 @@ async function buscaPedido() {
 }
 
 // init date
+// Atualização por gesto no celular: puxe a tela para baixo no topo da página.
+let pullStartY = 0;
+document.addEventListener('touchstart', e => { if (window.scrollY <= 5) pullStartY = e.touches[0].clientY; }, {passive:true});
+document.addEventListener('touchend', e => {
+  const delta = e.changedTouches[0].clientY - pullStartY;
+  if (pullStartY && delta > 80 && window.scrollY <= 5) {
+    const pagina = document.querySelector('#app-tech .page.act')?.id;
+    if (pagina === 't-dash') loadDashboard();
+    else if (pagina === 't-clientes') { state.loaded.clients=false; loadClientes(); }
+    else if (pagina === 't-ordens') { state.loaded.orders=false; loadOrdens(); }
+    else if (pagina === 't-equip') { state.loaded.equip=false; loadEquip(); }
+    else if (pagina === 't-agenda') loadAgenda();
+    else if (pagina === 't-pagamentos') loadPagamentos();
+    else if (pagina === 't-solicit') { state.loaded.requests=false; loadSolicitacoes(); }
+    toast('Atualizando...');
+  }
+  pullStartY = 0;
+}, {passive:true});
 setDashDate();
 ['nc-nome','ec-nome','t-user'].forEach(id=>{ const el=document.getElementById(id); if(el){ el.addEventListener('blur',()=>normalizeNameField(el)); el.addEventListener('change',()=>normalizeNameField(el)); } });
 // Mantém o técnico no painel após recarregar a página.
