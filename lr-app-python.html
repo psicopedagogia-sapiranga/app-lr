@@ -929,6 +929,7 @@ function statusBadge(s) {
         </div>
       </div>
       <div class="field"><label>Data agendada</label><input type="date" class="fi" id="no-data"></div>
+      <div class="field"><label>Horário</label><input type="time" class="fi" id="no-hora"></div>
       <div class="field"><label>Descrição</label><textarea class="fi" rows="2" id="no-desc"></textarea></div>
       <div class="field"><label>Valor estimado (R$)</label><input type="number" class="fi" id="no-valor" placeholder="0.00"></div>
       <button class="btn btn-blue btn-w" id="no-btn" onclick="salvarOrdem()">Criar Ordem</button>
@@ -1413,7 +1414,7 @@ function renderOrdens(list) {
         ${statusBadge(o.status||'Aberta')}
       </div>
       ${o.description?`<div class="card-s">${o.description}</div>`:''}
-      ${o.scheduled_date?`<div class="card-s">📅 ${fmtDate(o.scheduled_date)}</div>`:''}
+      ${o.scheduled_date?`<div class="card-s">📅 ${fmtDate(o.scheduled_date)}${o.scheduled_time?' · '+o.scheduled_time:''}</div>`:''}
       ${o.estimated_value?`<div class="card-s">💰 R$ ${o.estimated_value.toFixed(2).replace('.',',')}${o.paid?' ✅':''}</div>`:''}
       <div class="fgap">
         ${o.status!=='Concluída'?`<button class="btn btn-sm btn-sm-g" onclick="atualizarOrdem('${o.id}','Concluída')">Concluir</button>`:''}
@@ -1430,7 +1431,36 @@ renderOrdens = function(list){
   state.orders = list || [];
   atualizarBadgesSolicitacoes();
   renderOrdensAbertas((list || []).filter(o => !String(o.status || '').toLowerCase().startsWith('conclu')));
+  document.querySelectorAll('#ord-list .order-card').forEach((card, i) => {
+    const ordem = (list || []).filter(o => !String(o.status || '').toLowerCase().startsWith('conclu'))[i];
+    if (!ordem) return;
+    card.dataset.orderId = ordem.id;
+    card.style.cursor = 'pointer';
+    card.onclick = e => { if (!e.target.closest('button')) abrirDetalheOrdem(ordem.id); };
+    const row = card.querySelector('.row');
+    if (row && !row.querySelector('.order-next')) row.insertAdjacentHTML('beforeend','<svg class="order-next" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--text3)" stroke-width="2"><polyline points="9 18 15 12 9 6"/></svg>');
+  });
 };
+
+function abrirDetalheOrdem(id) {
+  const o = state.orders.find(x=>x.id===id); if (!o) return;
+  document.getElementById('det-cli-titulo').textContent = formatName(o.client_name);
+  document.getElementById('det-cli-body').innerHTML = `
+    <div style="display:flex;flex-direction:column;gap:14px;margin-bottom:18px;">
+      ${[['SERVIÇO',o.service_type||'—'],['STATUS',o.status||'Aberta'],['DESCRIÇÃO',o.description||'—'],['DATA',o.scheduled_date?fmtDate(o.scheduled_date):'—'],['HORÁRIO',o.scheduled_time||'—'],['VALOR',o.estimated_value?'R$ '+Number(o.estimated_value).toFixed(2).replace('.',','):'—']].map(([l,v])=>`<div><div style="font-size:.65rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.08em;margin-bottom:2px;">${l}</div><div style="font-size:.88rem;color:var(--text);word-break:break-word;">${v}</div></div>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;"><button class="btn btn-blue" style="flex:1;padding:12px;" onclick="fecharModal('m-cli-detalhe');editarOrdemDetalhe('${o.id}')">Editar</button><button class="btn" style="flex:1;padding:12px;background:var(--dangerL);color:var(--danger);border:1px solid var(--danger);border-radius:10px;font-weight:700;font-size:.85rem;cursor:pointer;" onclick="fecharModal('m-cli-detalhe');excluirOrdem('${o.id}')">Excluir</button></div>`;
+  abrirModal('m-cli-detalhe');
+}
+async function editarOrdemDetalhe(id) {
+  const o = state.orders.find(x=>x.id===id); if (!o) return;
+  const servico = prompt('Tipo de serviço:', o.service_type||''); if (servico===null) return;
+  const descricao = prompt('Descrição:', o.description||''); if (descricao===null) return;
+  const valor = prompt('Valor:', o.estimated_value ?? ''); if (valor===null) return;
+  const horario = prompt('Horário (ex.: 09:00):', o.scheduled_time || ''); if (horario===null) return;
+  try { const atualizado=await apiPut('ServiceOrder',id,{service_type:servico.trim(),description:descricao,estimated_value:valor===''?undefined:Number(valor),scheduled_time:horario||undefined}); Object.assign(o,atualizado); renderOrdens(state.orders); toast('Ordem atualizada'); }
+  catch(e){ toast('Não foi possível editar a ordem'); }
+}
 
 // Ajustes de UX das ações: texto curto e hierarquia clara no celular.
 function decorateOrderActions(){
@@ -1728,7 +1758,7 @@ function renderAgendaDia(data) {
   const ev = agEventosDoDia(dataStr);
   let html = '';
   ev.ordens.forEach(o => {
-    html += `<div class="card"><div class="row"><span class="card-t">🔧 ${formatName(o.client_name)} · ${o.service_type}</span>${statusBadge(o.status||'Aberta')}</div>
+    html += `<div class="card"><div class="row"><span class="card-t">🔧 ${formatName(o.client_name)} · ${o.service_type}</span>${statusBadge(o.status||'Aberta')}</div><div class="card-s">${o.scheduled_time?'🕒 '+o.scheduled_time:''}</div>
       ${o.estimated_value?`<div class="card-s">💰 R$ ${o.estimated_value.toFixed(2).replace('.',',')}${o.paid?' ✅ pago':' · a receber'}</div>`:''}
     </div>`;
   });
@@ -1921,6 +1951,7 @@ async function salvarOrdem() {
       status: document.getElementById('no-status').value,
       urgency: urgVal,
       scheduled_date: document.getElementById('no-data').value||undefined,
+      scheduled_time: document.getElementById('no-hora').value||undefined,
       description: document.getElementById('no-desc').value,
       estimated_value: valor||undefined
     });
