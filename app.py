@@ -14,7 +14,7 @@ Novidades:
 - Configurações: guarda usuário/senha do login no banco (não mais fixo no código).
 - Banco persistente: os dados não somem mais quando o Render reinicia ou publica.
 """
-import os, json, uuid, datetime, logging, sys
+import os, json, uuid, datetime, logging, sys, time
 from flask import Flask, request, jsonify, g, send_from_directory
 
 app = Flask(__name__)
@@ -28,23 +28,39 @@ if USANDO_POSTGRES:
 else:
     import sqlite3
 
+SENSITIVE_KEYS = {'password','senha','token','authorization','cookie','api_key','apikey','database_url','phone','telefone','email','address','endereco','dados'}
+def sanitize(value, key=''):
+    if key.lower() in SENSITIVE_KEYS: return '[REDACTED]'
+    if isinstance(value, dict): return {str(k): sanitize(v, str(k)) for k,v in value.items()}
+    if isinstance(value, (list, tuple)): return [sanitize(v) for v in value]
+    return value
+
 class JsonFormatter(logging.Formatter):
     def format(self, record):
-        data = {'level': record.levelname.lower(), 'action': record.getMessage(), 'at': datetime.datetime.utcnow().isoformat()+'Z'}
+        data = {'level': record.levelname.lower(), 'action': getattr(record, 'action', record.getMessage()), 'at': datetime.datetime.utcnow().isoformat()+'Z'}
         if hasattr(g, 'request_id'): data['requestId'] = g.request_id
-        if request and request.headers.get('X-User-Id'): data['userId'] = request.headers.get('X-User-Id')
-        return json.dumps(data, ensure_ascii=False)
-logger = logging.getLogger('lr'); logger.setLevel(logging.INFO)
-handler = logging.StreamHandler(sys.stdout); handler.setFormatter(JsonFormatter()); logger.addHandler(handler)
+        if hasattr(g, 'user_id') and g.user_id: data['userId'] = g.user_id
+        fields = getattr(record, 'fields', {})
+        data.update(sanitize(fields))
+        if record.exc_info: data['exception'] = self.formatException(record.exc_info)
+        return json.dumps(sanitize(data), ensure_ascii=False, default=str)
+logger = logging.getLogger('lr'); logger.setLevel(os.environ.get('LOG_LEVEL','INFO').upper()); logger.propagate = False
+handler = logging.StreamHandler(sys.stdout); handler.setFormatter(JsonFormatter())
+if not logger.handlers: logger.addHandler(handler)
+def log_event(level, action, **fields):
+    logger.log(getattr(logging, level.upper(), logging.INFO), action, extra={'action': action, 'fields': fields})
 
 @app.before_request
 def request_context():
     g.request_id = request.headers.get('X-Request-Id') or str(uuid.uuid4())
-    logger.info('request.start %s %s', request.method, request.path)
+    g.started_at = time.perf_counter()
+    g.user_id = request.headers.get('X-User-Id')
+    log_event('info', 'request.start', method=request.method, path=request.path)
 
 @app.after_request
 def request_headers(response):
     response.headers['X-Request-Id'] = g.request_id
+    log_event('info', 'request.end', method=request.method, path=request.path, status=response.status_code, durationMs=round((time.perf_counter()-getattr(g,'started_at',time.perf_counter()))*1000, 2))
     return response
 
 @app.errorhandler(404)
@@ -53,7 +69,7 @@ def not_found(exc):
 
 @app.errorhandler(Exception)
 def unhandled_error(exc):
-    logger.exception('request.failed')
+    logger.exception('request.failed', extra={'action':'request.failed','fields':{'errorType':type(exc).__name__}})
     return jsonify({'erro':'erro interno','requestId':g.request_id}), 500
 
 @app.after_request
@@ -269,7 +285,7 @@ def autenticar():
     conn.close()
     cfg = {row_get(r, 'chave'): row_get(r, 'valor') for r in rows}
     ok = dados.get('usuario') == cfg.get('usuario') and dados.get('senha') == cfg.get('senha')
-    logger.info('auth.%s', 'success' if ok else 'failure')
+    log_event('info', 'auth.success' if ok else 'auth.failure', method='password')
     return jsonify({'ok': ok}), (200 if ok else 401)
 
 @app.route("/api/config", methods=["PUT"])
