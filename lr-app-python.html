@@ -369,7 +369,9 @@ select.fi{appearance:none;cursor:pointer;background-image:url("data:image/svg+xm
 
 <!-- ===== API CONFIG ===== -->
 <script>
-const API_BASE = 'http://localhost:5000/api';
+// Usa o mesmo servidor que entregou a página. Assim funciona localmente
+// (localhost:5000) e também no endereço público do Render.
+const API_BASE = '/api';
 const API_KEY  = '';
 
 async function apiGet(entity, params = {}) {
