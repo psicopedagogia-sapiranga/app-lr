@@ -1,17 +1,32 @@
 """
 Backend do app LR Climatização.
-Guarda tudo num banco SQLite local (arquivo dados.db).
+
+Usa PostgreSQL (Supabase) quando a variável de ambiente DATABASE_URL existe
+— é o caso quando roda no Render.
+Se DATABASE_URL não existir, usa SQLite local (arquivo dados.db)
+— é o caso quando você testa no seu computador (localhost).
+
 Responde igual à API da Base44, então o HTML quase não muda.
 
 Novidades:
 - Lixeira: excluir não apaga na hora, só marca como excluído.
   Fica lá 7 dias, dá pra restaurar. Depois de 7 dias, some pra sempre.
 - Configurações: guarda usuário/senha do login no banco (não mais fixo no código).
+- Banco persistente: os dados não somem mais quando o Render reinicia ou publica.
 """
-import sqlite3, json, uuid, datetime, logging, re, sys
+import os, json, uuid, datetime, logging, sys
 from flask import Flask, request, jsonify, g, send_from_directory
 
 app = Flask(__name__)
+
+DATABASE_URL = os.environ.get("DATABASE_URL")
+USANDO_POSTGRES = bool(DATABASE_URL)
+
+if USANDO_POSTGRES:
+    import psycopg2
+    import psycopg2.extras
+else:
+    import sqlite3
 
 class JsonFormatter(logging.Formatter):
     def format(self, record):
@@ -59,14 +74,28 @@ def home():
 def logo():
     return send_from_directory('.', 'icone-lr.svg')
 
+# ---------------------------------------------------------------------------
+# Camada de banco de dados: cada função sabe falar tanto com Postgres quanto
+# com SQLite. O "q" troca o placeholder (%s no Postgres, ? no SQLite).
+# ---------------------------------------------------------------------------
+
 def get_db():
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
-    return conn
+    if USANDO_POSTGRES:
+        conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
+        return conn
+    else:
+        conn = sqlite3.connect(DB)
+        conn.row_factory = sqlite3.Row
+        return conn
+
+def q(sql):
+    """Troca os placeholders ? por %s quando estamos no Postgres."""
+    return sql.replace("?", "%s") if USANDO_POSTGRES else sql
 
 def init_db():
     conn = get_db()
-    conn.execute("""
+    cur = conn.cursor()
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS registros (
             id TEXT PRIMARY KEY,
             entidade TEXT NOT NULL,
@@ -75,45 +104,56 @@ def init_db():
             excluido_em TEXT
         )
     """)
-    conn.execute("""
+    cur.execute("""
         CREATE TABLE IF NOT EXISTS config (
             chave TEXT PRIMARY KEY,
             valor TEXT
         )
     """)
-    existe = conn.execute("SELECT 1 FROM config WHERE chave='usuario'").fetchone()
+    cur.execute(q("SELECT 1 FROM config WHERE chave='usuario'"))
+    existe = cur.fetchone()
     if not existe:
-        conn.execute("INSERT INTO config (chave, valor) VALUES ('usuario', 'Luis Rodrigues')")
-        conn.execute("INSERT INTO config (chave, valor) VALUES ('senha', 'Luis1994.')")
+        cur.execute(q("INSERT INTO config (chave, valor) VALUES ('usuario', 'Luis Rodrigues')"))
+        cur.execute(q("INSERT INTO config (chave, valor) VALUES ('senha', 'Luis1994.')"))
     conn.commit()
+    cur.close()
     conn.close()
+
+def row_get(row, key):
+    """Lê um campo de uma linha, funcionando tanto para dict (Postgres) quanto sqlite3.Row."""
+    return row[key]
 
 def limpar_lixeira_antiga():
     limite = (datetime.datetime.utcnow() - datetime.timedelta(days=DIAS_NA_LIXEIRA)).isoformat()
     conn = get_db()
-    conn.execute("DELETE FROM registros WHERE excluido_em IS NOT NULL AND excluido_em < ?", (limite,))
+    cur = conn.cursor()
+    cur.execute(q("DELETE FROM registros WHERE excluido_em IS NOT NULL AND excluido_em < ?"), (limite,))
     conn.commit()
+    cur.close()
     conn.close()
 
 def row_to_obj(row):
-    obj = json.loads(row["dados"])
-    obj["id"] = row["id"]
-    obj["created_date"] = row["criado_em"]
-    if row["excluido_em"]:
-        obj["excluido_em"] = row["excluido_em"]
+    obj = json.loads(row_get(row, "dados"))
+    obj["id"] = row_get(row, "id")
+    obj["created_date"] = row_get(row, "criado_em")
+    if row_get(row, "excluido_em"):
+        obj["excluido_em"] = row_get(row, "excluido_em")
     return obj
 
 @app.route("/api/entities/<entidade>", methods=["GET"])
 def listar(entidade):
     conn = get_db()
+    cur = conn.cursor()
     sort_by = request.args.get("sort_by", "-criado_em")
     limit = int(request.args.get("limit", 200))
     ordem = "DESC" if sort_by.startswith("-") else "ASC"
 
-    rows = conn.execute(
-        f"SELECT * FROM registros WHERE entidade=? AND excluido_em IS NULL ORDER BY criado_em {ordem} LIMIT ?",
+    cur.execute(
+        q(f"SELECT * FROM registros WHERE entidade=? AND excluido_em IS NULL ORDER BY criado_em {ordem} LIMIT ?"),
         (entidade, limit)
-    ).fetchall()
+    )
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
     return jsonify([row_to_obj(r) for r in rows])
 
@@ -124,11 +164,13 @@ def criar(entidade):
     agora = datetime.datetime.utcnow().isoformat()
 
     conn = get_db()
-    conn.execute(
-        "INSERT INTO registros (id, entidade, dados, criado_em, excluido_em) VALUES (?, ?, ?, ?, NULL)",
+    cur = conn.cursor()
+    cur.execute(
+        q("INSERT INTO registros (id, entidade, dados, criado_em, excluido_em) VALUES (?, ?, ?, ?, NULL)"),
         (novo_id, entidade, json.dumps(dados), agora)
     )
     conn.commit()
+    cur.close()
     conn.close()
 
     dados["id"] = novo_id
@@ -139,27 +181,33 @@ def criar(entidade):
 def atualizar(entidade, id):
     dados_novos = request.get_json(force=True) or {}
     conn = get_db()
-    row = conn.execute("SELECT * FROM registros WHERE id=? AND entidade=?", (id, entidade)).fetchone()
+    cur = conn.cursor()
+    cur.execute(q("SELECT * FROM registros WHERE id=? AND entidade=?"), (id, entidade))
+    row = cur.fetchone()
     if not row:
+        cur.close()
         conn.close()
         return jsonify({"erro": "não encontrado"}), 404
 
-    atual = json.loads(row["dados"])
+    atual = json.loads(row_get(row, "dados"))
     atual.update(dados_novos)
-    conn.execute("UPDATE registros SET dados=? WHERE id=?", (json.dumps(atual), id))
+    cur.execute(q("UPDATE registros SET dados=? WHERE id=?"), (json.dumps(atual), id))
     conn.commit()
+    cur.close()
     conn.close()
 
     atual["id"] = id
-    atual["created_date"] = row["criado_em"]
+    atual["created_date"] = row_get(row, "criado_em")
     return jsonify(atual)
 
 @app.route("/api/entities/<entidade>/<id>", methods=["DELETE"])
 def apagar(entidade, id):
     agora = datetime.datetime.utcnow().isoformat()
     conn = get_db()
-    conn.execute("UPDATE registros SET excluido_em=? WHERE id=? AND entidade=?", (agora, id, entidade))
+    cur = conn.cursor()
+    cur.execute(q("UPDATE registros SET excluido_em=? WHERE id=? AND entidade=?"), (agora, id, entidade))
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"ok": True})
 
@@ -167,46 +215,59 @@ def apagar(entidade, id):
 def listar_lixeira():
     limpar_lixeira_antiga()
     conn = get_db()
-    rows = conn.execute(
-        "SELECT * FROM registros WHERE excluido_em IS NOT NULL ORDER BY excluido_em DESC"
-    ).fetchall()
+    cur = conn.cursor()
+    cur.execute(q("SELECT * FROM registros WHERE excluido_em IS NOT NULL ORDER BY excluido_em DESC"))
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
     resultado = []
     for r in rows:
         obj = row_to_obj(r)
-        obj["entidade"] = r["entidade"]
+        obj["entidade"] = row_get(r, "entidade")
         resultado.append(obj)
     return jsonify(resultado)
 
 @app.route("/api/lixeira/<id>/restaurar", methods=["POST"])
 def restaurar(id):
     conn = get_db()
-    conn.execute("UPDATE registros SET excluido_em=NULL WHERE id=?", (id,))
+    cur = conn.cursor()
+    cur.execute(q("UPDATE registros SET excluido_em=NULL WHERE id=?"), (id,))
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"ok": True})
 
 @app.route("/api/lixeira/<id>", methods=["DELETE"])
 def apagar_definitivo(id):
     conn = get_db()
-    conn.execute("DELETE FROM registros WHERE id=?", (id,))
+    cur = conn.cursor()
+    cur.execute(q("DELETE FROM registros WHERE id=?"), (id,))
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"ok": True})
 
 @app.route("/api/config", methods=["GET"])
 def ver_config():
     conn = get_db()
-    rows = conn.execute("SELECT chave, valor FROM config").fetchall()
+    cur = conn.cursor()
+    cur.execute(q("SELECT chave, valor FROM config"))
+    rows = cur.fetchall()
+    cur.close()
     conn.close()
     # Nunca devolver a senha para o navegador; somente o endpoint de autenticação compara.
-    return jsonify({r["chave"]: r["valor"] for r in rows if r["chave"] != 'senha'})
+    return jsonify({row_get(r, "chave"): row_get(r, "valor") for r in rows if row_get(r, "chave") != 'senha'})
 
 @app.route('/api/auth', methods=['POST'])
 def autenticar():
     dados = request.get_json(silent=True) or {}
-    conn = get_db(); rows = conn.execute('SELECT chave, valor FROM config WHERE chave IN (?,?)', ('usuario','senha')).fetchall(); conn.close()
-    cfg = {r['chave']: r['valor'] for r in rows}
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute(q('SELECT chave, valor FROM config WHERE chave IN (?,?)'), ('usuario', 'senha'))
+    rows = cur.fetchall()
+    cur.close()
+    conn.close()
+    cfg = {row_get(r, 'chave'): row_get(r, 'valor') for r in rows}
     ok = dados.get('usuario') == cfg.get('usuario') and dados.get('senha') == cfg.get('senha')
     logger.info('auth.%s', 'success' if ok else 'failure')
     return jsonify({'ok': ok}), (200 if ok else 401)
@@ -215,14 +276,20 @@ def autenticar():
 def salvar_config():
     dados = request.get_json(force=True) or {}
     conn = get_db()
+    cur = conn.cursor()
     for chave in ("usuario", "senha"):
         if chave in dados and dados[chave]:
-            conn.execute("UPDATE config SET valor=? WHERE chave=?", (dados[chave], chave))
+            cur.execute(q("UPDATE config SET valor=? WHERE chave=?"), (dados[chave], chave))
     conn.commit()
+    cur.close()
     conn.close()
     return jsonify({"ok": True})
 
+# Cria as tabelas assim que o módulo é importado (necessário no Render, que
+# roda o app via gunicorn e nunca passa pelo "if __name__ == '__main__'").
+init_db()
+
 if __name__ == "__main__":
-    init_db()
     print("Servidor rodando em http://localhost:5000")
+    print(f"Banco em uso: {'PostgreSQL (Supabase)' if USANDO_POSTGRES else 'SQLite local (dados.db)'}")
     app.run(host="0.0.0.0", port=5000, debug=False)
