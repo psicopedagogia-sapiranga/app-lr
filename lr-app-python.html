@@ -375,7 +375,7 @@ const API_BASE = '/api';
 const API_KEY  = '';
 
 async function apiGet(entity, params = {}) {
-  const url = new URL(`${API_BASE}/entities/${entity}`);
+  const url = new URL(`${API_BASE}/entities/${entity}`, window.location.origin);
   Object.entries(params).forEach(([k,v]) => url.searchParams.set(k, typeof v === 'object' ? JSON.stringify(v) : v));
   const r = await fetch(url, { headers: {} });
   if (!r.ok) throw new Error(await r.text());
