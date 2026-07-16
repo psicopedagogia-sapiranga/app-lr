@@ -468,7 +468,7 @@ function initials(name) {
   return name.split(' ').filter(Boolean).slice(0,2).map(n=>n[0].toUpperCase()).join('');
 }
 function formatName(value) {
-  return String(value||'').trim().toLocaleLowerCase('pt-BR').replace(/\b[\p{L}]/gu, c => c.toLocaleUpperCase('pt-BR'));
+  return String(value||'').trim().toLocaleLowerCase('pt-BR').replace(/(^|[\s'-])(\p{L})/gu, (_, sep, c) => sep + c.toLocaleUpperCase('pt-BR'));
 }
 function normalizeNameField(el) { if (el && el.value) el.value = formatName(el.value); }
 function normalizeNamesDeep(value) {
@@ -944,13 +944,14 @@ function statusBadge(s) {
   <div class="mbox">
     <div class="mbox-head"><div class="mbox-title">Novo Equipamento <button class="m-close" onclick="fecharModal('m-equip')">✕</button></div></div>
     <div class="mbox-body">
-      <div class="field"><label>Cliente *</label><select class="fi" id="ne-cliente"><option value="">Selecione</option></select></div>
+      <div class="field"><label>Cliente (opcional)</label><select class="fi" id="ne-cliente"><option value="">Sem cliente (estoque)</option></select></div>
       <div class="field"><label>Modelo *</label><input type="text" class="fi" id="ne-modelo" placeholder="Ex: LG Dual Inverter"></div>
       <div class="field"><label>Tipo *</label><select class="fi" id="ne-tipo"><option value="">Selecione</option><option>Ar-condicionado Split</option><option>Multi-split</option><option>Cassete</option><option>Janela</option><option>Portão Elétrico</option><option>Câmera CFTV</option><option>Cerca Elétrica</option><option>Antena</option><option>Outro</option></select></div>
       <div class="field"><label>Marca</label><input type="text" class="fi" id="ne-marca"></div>
       <div class="field"><label>Capacidade (BTU)</label><input type="text" class="fi" id="ne-btu"></div>
       <div class="field"><label>Data de instalação</label><input type="date" class="fi" id="ne-data"></div>
       <div class="field"><label>Número de série</label><input type="text" class="fi" id="ne-serie"></div>
+      <input type="hidden" id="ne-edit-id">
       <button class="btn btn-blue btn-w" id="ne-btn" onclick="salvarEquipamento()">Salvar Equipamento</button>
     </div>
   </div>
@@ -1335,13 +1336,17 @@ function renderEquip(list) {
 }
 async function editarEquipamento(id) {
   const e = state.equipment.find(x => x.id === id); if (!e) return;
-  const modelo = prompt('Modelo do equipamento:', e.model || ''); if (modelo === null) return;
-  const marca = prompt('Marca:', e.brand || ''); if (marca === null) return;
-  try {
-    await apiPut('Equipment', id, {model:modelo.trim(), brand:marca.trim()});
-    Object.assign(e, {model:modelo.trim(), brand:marca.trim()});
-    renderEquip(state.equipment); toast('Equipamento atualizado');
-  } catch(err) { toast('Não foi possível editar o equipamento'); }
+  document.querySelector('#m-equip .mbox-title').firstChild.textContent = 'Editar Equipamento ';
+  document.getElementById('ne-edit-id').value = id;
+  document.getElementById('ne-cliente').value = e.client_id || '';
+  document.getElementById('ne-modelo').value = e.model || '';
+  document.getElementById('ne-tipo').value = e.type || '';
+  document.getElementById('ne-marca').value = e.brand || '';
+  document.getElementById('ne-btu').value = e.btu || '';
+  document.getElementById('ne-data').value = e.installation_date || '';
+  document.getElementById('ne-serie').value = e.serial_number || '';
+  document.getElementById('ne-btn').textContent = 'Salvar alterações';
+  abrirModal('m-equip');
 }
 async function excluirEquipamento(id) {
   const e = state.equipment.find(x => x.id === id); if (!e) return;
@@ -1979,7 +1984,7 @@ async function salvarOrdem() {
       equipment_id: equipSel.value||undefined,
       equipment_name: equipSel.value ? equipName.split(' (')[0] : undefined,
       service_type: tipo,
-      status: document.getElementById('no-status').value,
+      status: document.getElementById('no-status').value || 'Aberta',
       urgency: urgVal,
       scheduled_date: document.getElementById('no-data').value||undefined,
       scheduled_time: document.getElementById('no-hora').value||undefined,
@@ -1999,28 +2004,32 @@ async function salvarOrdem() {
 // ===== SAVE EQUIPMENT =====
 async function salvarEquipamento() {
   const clienteSel = document.getElementById('ne-cliente');
+  const editId = document.getElementById('ne-edit-id').value;
   const modelo = document.getElementById('ne-modelo').value.trim();
   const tipo = document.getElementById('ne-tipo').value;
-  if (!clienteSel.value) { toast('⚠️ Selecione um cliente'); return; }
   if (!modelo) { toast('⚠️ Informe o modelo'); return; }
   if (!tipo) { toast('⚠️ Selecione o tipo'); return; }
   const btn = document.getElementById('ne-btn');
   btn.textContent = 'Salvando...'; btn.disabled = true;
   try {
-    const e = await apiPost('Equipment', {
-      client_id: clienteSel.value,
-      client_name: clienteSel.options[clienteSel.selectedIndex].text,
+    const dados = {
+      client_id: clienteSel.value || undefined,
+      client_name: clienteSel.value ? clienteSel.options[clienteSel.selectedIndex].text : '',
       model: modelo, type: tipo,
       brand: document.getElementById('ne-marca').value,
       btu: document.getElementById('ne-btu').value,
       installation_date: document.getElementById('ne-data').value||undefined,
       serial_number: document.getElementById('ne-serie').value
-    });
-    state.equipment.unshift(e);
+    };
+    const e = editId ? await apiPut('Equipment', editId, dados) : await apiPost('Equipment', dados);
+    if (editId) { const idx = state.equipment.findIndex(x=>x.id===editId); if (idx >= 0) state.equipment[idx] = e; }
+    else state.equipment.unshift(e);
     state.loaded.equip = true;
     renderEquip(state.equipment);
     fecharModal('m-equip');
-    toast(`✅ Equipamento "${modelo}" cadastrado!`);
+    toast(editId ? '✅ Equipamento atualizado!' : `✅ Equipamento "${modelo}" cadastrado!`);
+    document.getElementById('ne-edit-id').value = '';
+    document.querySelector('#m-equip .mbox-title').firstChild.textContent = 'Novo Equipamento ';
     ['ne-modelo','ne-marca','ne-btu','ne-data','ne-serie'].forEach(id=>document.getElementById(id).value='');
   } catch(e) { toast('Erro ao salvar equipamento'); }
   finally { btn.textContent='Salvar Equipamento'; btn.disabled=false; }
