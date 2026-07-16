@@ -1200,10 +1200,10 @@ async function loadDashboard() {
       <div class="sc"><div class="sc-num cr">${atrasadas}</div><div class="sc-lbl">Em Atraso</div></div>
       <div class="sc"><div class="sc-num cb">${clients.length}</div><div class="sc-lbl">Clientes</div></div>
       <div class="sc"><div class="sc-num cg">${concluidas}</div><div class="sc-lbl">Concluídas</div></div>
-      <div class="sc"><div class="sc-num cb">${esteMes}</div><div class="sc-lbl">Ordens no Mês Atual</div></div>
+      <div class="sc"><div class="sc-num cb">${esteMes}</div><div class="sc-lbl">Ordens Desse Mês</div></div>
     `;
     document.getElementById('dash-alerts').innerHTML = '';
-    let alertsHtml = `<div class="sc" style="grid-column:1/-1;"><div class="sc-num cg">R$ ${recebido.toFixed(2).replace('.',',')}</div><div class="sc-lbl">Receita Confirmada do Mês</div></div>`;
+    let alertsHtml = `<div class="sc" style="grid-column:1/-1;"><div class="sc-num cg">R$ ${recebido.toFixed(2).replace('.',',')}</div><div class="sc-lbl">Total Recebido no Mês</div></div>`;
     reminders.filter(r=>r.status==='Pendente').forEach(r=>{
       const dd = new Date(r.due_date);
       if (dd <= hoje) alertsHtml += `<div class="alert alert-r" style="grid-column:1/-1;">🚨 ${formatName(r.client_name)} — ${r.maintenance_type} venceu em ${fmtDate(r.due_date)}</div>`;
