@@ -369,6 +369,18 @@ select.fi{appearance:none;cursor:pointer;background-image:url("data:image/svg+xm
 @keyframes pagspin{to{transform:rotate(360deg);}}
 .btn.pagando{background:var(--green,#22a55c)!important;color:#fff!important;transition:background .3s;}
 </style>
+<style>
+/* Refinamento visual — somente apresentação, sem alterar comportamento */
+:root{--radius-polish:14px;--shadow-polish:0 8px 24px rgba(0,20,18,.10)}
+.card,.sc,.ec,.fr,.crow,.order-card{border-radius:var(--radius-polish);box-shadow:var(--shadow-polish);transition:transform .18s ease,box-shadow .18s ease,border-color .18s ease}
+.card:hover,.sc:hover,.ec:hover,.fr:hover,.crow:hover{transform:translateY(-1px);box-shadow:0 12px 30px rgba(0,20,18,.14)}
+.btn{transition:transform .15s ease,filter .15s ease,box-shadow .15s ease}.btn:hover{filter:brightness(1.07);box-shadow:0 4px 12px rgba(0,0,0,.12)}.btn:active{transform:translateY(1px)}
+.fgap{align-items:center}.sec-lbl{margin-top:20px}.pt{letter-spacing:-.02em}.ps{line-height:1.5}
+.fi,.si{transition:border-color .18s ease,box-shadow .18s ease}.fi:focus,.si:focus{box-shadow:0 0 0 4px rgba(47,111,106,.14)}
+.order-card{background:linear-gradient(145deg,var(--card),var(--bg2));}.order-card .card-t{letter-spacing:-.01em}.badge{letter-spacing:.01em}
+.ag-cel{border:1px solid color-mix(in srgb,var(--border) 70%,transparent);}.ag-cel:hover{border-color:var(--blue3)}
+@media (min-width:700px){.pcontent{padding-left:24px;padding-right:24px}.sg{gap:12px}.card,.sc,.ec,.fr,.crow{padding:15px 16px}}
+</style>
 </head>
 <body>
 
