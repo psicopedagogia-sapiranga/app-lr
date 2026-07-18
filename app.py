@@ -293,9 +293,12 @@ def salvar_config():
     dados = request.get_json(force=True) or {}
     conn = get_db()
     cur = conn.cursor()
-    for chave in ("usuario", "senha"):
-        if chave in dados and dados[chave]:
-            cur.execute(q("UPDATE config SET valor=? WHERE chave=?"), (dados[chave], chave))
+    # Configurações não sensíveis, como metas mensais, podem ser salvas sem
+    # alterar a estrutura do banco. Senha continua sendo tratada como antes.
+    for chave, valor in dados.items():
+        if chave in ("usuario", "senha") or str(chave).startswith("lr_meta_"):
+            if valor is not None and valor != "":
+                cur.execute(q("INSERT INTO config (chave, valor) VALUES (?, ?) ON CONFLICT (chave) DO UPDATE SET valor=excluded.valor"), (str(chave), str(valor))) if USANDO_POSTGRES else cur.execute(q("INSERT INTO config (chave, valor) VALUES (?, ?) ON CONFLICT(chave) DO UPDATE SET valor=excluded.valor"), (str(chave), str(valor)))
     conn.commit()
     cur.close()
     conn.close()

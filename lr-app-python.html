@@ -800,6 +800,7 @@ function statusBadge(s) {
       <div id="req-novos-wrap"></div>
       <div class="fgap" style="margin-bottom:13px;">
         <button class="btn btn-sm btn-sm-b" onclick="filtOrd('Agendada',this)">Agendadas</button>
+        <button class="btn btn-sm btn-sm-k filtro-atraso" onclick="filtOrd('Em Atraso',this)">Em Atraso</button>
         <button class="btn btn-sm btn-sm-k" onclick="filtOrd('A Marcar',this)">A Marcar</button>
         <button class="btn btn-sm btn-sm-k" onclick="filtOrd('Concluída',this)">Concluídas</button>
         <button class="btn btn-sm btn-sm-k" onclick="filtOrd('todas',this)">Todas</button>
@@ -2263,6 +2264,67 @@ const loadPagamentosBase=loadPagamentos; loadPagamentos=async function(){await l
 async function marcarNaoPagoRelatorio(id){const o=state.orders.find(x=>x.id===id);if(!o)return;try{await apiPut('ServiceOrder',id,{paid:false,paid_at:null,report_manual:false});o.paid=false;delete o.paid_at;o.report_manual=false;renderOrdens(state.orders);loadPagamentos();loadRelatorio();if(typeof loadAgenda==='function')loadAgenda();toast('Pagamento desfeito; ordem voltou para Concluídas');}catch(e){toast('Não foi possível desfazer o pagamento');}}
 async function excluirOrdemRelatorio(id){if(!confirm('Excluir esta ordem? Ela irá para a lixeira.'))return;try{await apiDelete('ServiceOrder',id);state.orders=state.orders.filter(x=>x.id!==id);renderOrdens(state.orders);loadPagamentos();loadRelatorio();toast('Ordem enviada para a lixeira');}catch(e){toast('Não foi possível excluir a ordem');}}
 const loadRelatorioBase=loadRelatorio; loadRelatorio=async function(){await loadRelatorioBase();document.querySelectorAll('#rel-body .crow').forEach((row,i)=>{const o=state.orders.filter(x=>pagamentoConfirmado(x)&&ordemConcluida(x))[i];if(o){const bar=document.createElement('div');bar.className='fgap';bar.style.marginTop='8px';bar.innerHTML='<button class="btn btn-sm btn-sm-k" type="button">Não paga</button><button class="btn btn-sm btn-sm-k" type="button">Excluir ordem</button>';bar.children[0].onclick=e=>{e.stopPropagation();marcarNaoPagoRelatorio(o.id);};bar.children[1].onclick=e=>{e.stopPropagation();excluirOrdemRelatorio(o.id);};row.appendChild(bar);}});};
+
+/* ===== Atualizações solicitadas: limpeza, atraso, atalhos e meta persistente ===== */
+(function instalarAtualizacoesSeguras(){
+  const dataLocal = s => { const m=String(s||'').match(/^(\d{4})-(\d{2})-(\d{2})/); return m?new Date(Number(m[1]),Number(m[2])-1,Number(m[3])):null; };
+  const isoLocal = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+  const maisUmAno = s => { const d=dataLocal(s); if(!d)return null; d.setFullYear(d.getFullYear()+1); return isoLocal(d); };
+  const hojeLocal = () => { const d=new Date(); return new Date(d.getFullYear(),d.getMonth(),d.getDate()); };
+  const emAtraso = o => !ordemConcluida(o) && !!o.scheduled_date && dataLocal(o.scheduled_date) < hojeLocal();
+  const eLimpeza = o => o.is_cleaning_followup === true || o.is_cleaning_followup === 'true';
+  const temValor = o => o.estimated_value !== null && o.estimated_value !== undefined && o.estimated_value !== '' && Number(o.estimated_value)>0;
+  window.dataLocalLR=dataLocal;
+
+  // Exibição sem UTC: input type=date representa uma data local, não um instante.
+  fmtDate = function(str){ const d=dataLocal(str); return d?d.toLocaleDateString('pt-BR'):''; };
+
+  // Menu e página Limpezas, sem modificar registros existentes.
+  if(!document.getElementById('sb-limpezas')){
+    const b=document.createElement('button'); b.className='sbi'; b.id='sb-limpezas'; b.innerHTML='🧹 Limpezas'; b.onclick=()=>{tp('t-limpezas');closeSB();};
+    document.getElementById('sb-ordens')?.parentNode?.insertBefore(b,document.getElementById('sb-clientes'));
+  }
+  if(!document.getElementById('t-limpezas')){
+    const p=document.createElement('div'); p.id='t-limpezas'; p.className='page'; p.innerHTML='<div class="ph"><div><div class="pt">Limpezas</div><div class="ps">Próximas limpezas programadas</div></div></div><div id="limpezas-list"><div class="loading"><div class="spinner"></div></div></div>';
+    document.querySelector('.pcontent')?.appendChild(p);
+  }
+  const tpBaseLim=tp; tp=function(id){tpBaseLim(id); if(id==='t-limpezas')loadLimpezas();};
+  function editarLimpeza(id){ abrirEdicaoOrdem(id); }
+  async function loadLimpezas(){ const os=await apiGet('ServiceOrder',{limit:200}); const ls=os.filter(eLimpeza); const el=document.getElementById('limpezas-list'); if(!el)return; el.innerHTML=ls.length?ls.map(o=>`<div class="card order-card" data-order-id="${o.id}" onclick="editarLimpeza('${o.id}')"><div class="row"><div class="card-t">${formatName(o.client_name||'Sem cliente')} · ${o.service_type||'Limpeza'}</div>${statusBadge(statusAtual(o))}<span style="margin-left:auto;color:var(--text3)">›</span></div><div class="card-s">${o.scheduled_date?fmtDate(o.scheduled_date):'Sem data'}${o.scheduled_time?' · '+o.scheduled_time:''}</div>${o.description?`<div class="card-s">${o.description}</div>`:''}</div>`).join(''):'<div class="empty">Nenhuma limpeza programada</div>'; }
+  window.loadLimpezas=loadLimpezas; window.editarLimpeza=editarLimpeza;
+
+  async function criarCopiaLimpeza(origem, dataBase){
+    if(!origem || !origem.client_id || !dataBase)return;
+    const dados={client_id:origem.client_id,client_name:origem.client_name,service_type:'Limpeza',status:'Agendada',description:origem.description||'',scheduled_date:maisUmAno(dataBase),scheduled_time:null,estimated_value:null,is_cleaning_followup:true,source_order_id:origem.id};
+    const existente=(state.orders||[]).find(x=>eLimpeza(x)&&x.source_order_id===origem.id&&x.scheduled_date===dados.scheduled_date);
+    if(existente)return;
+    const novo=await apiPost('ServiceOrder',dados); state.orders=state.orders||[]; state.orders.unshift(novo); return novo;
+  }
+  window.agendarLimpeza=async function(id){try{const o=state.orders.find(x=>x.id===id);if(!o||!o.scheduled_date){toast('A ordem precisa ter uma data agendada');return;}await criarCopiaLimpeza(o,o.scheduled_date);toast('Limpeza agendada para daqui a um ano');}catch(e){toast('Não foi possível agendar a limpeza');}};
+  const atualizarBaseLim=atualizarOrdem; atualizarOrdem=async function(id,status){const o=state.orders.find(x=>x.id===id); const resultado=await atualizarBaseLim(id,status); if(status==='Concluída'&&o&&['Instalação','Limpeza'].includes(o.service_type)&&!eLimpeza(o)){try{await criarCopiaLimpeza(o,isoLocal(new Date()));}catch(e){toast('Serviço finalizado, mas a limpeza anual não foi criada');}} return resultado;};
+
+  const renderBaseLim=renderOrdens; renderOrdens=function(list){renderBaseLim(list); document.querySelectorAll('#ord-list .order-card').forEach(card=>{const o=(list||[]).find(x=>x.id===card.dataset.orderId);if(!o||eLimpeza(o))return;const f=card.querySelector('.fgap');if(!f||f.querySelector('.btn-limpeza'))return;const b=document.createElement('button');b.className='btn btn-sm btn-limpeza';b.textContent='Agendar limpeza';b.style.cssText='background:#5b8f7b;color:#fff;padding:6px 9px;font-size:.7rem;';b.onclick=e=>{e.stopPropagation();agendarLimpeza(o.id);};f.appendChild(b);if(!temValor(o))f.querySelectorAll('.btn-cobrar').forEach(x=>x.remove());});};
+
+  const filtBase=filtOrd; filtOrd=function(f,btn){window.filtroOrdAtual=f;if(btn){document.querySelectorAll('#t-ordens .fgap:first-of-type .btn').forEach(b=>b.className='btn btn-sm btn-sm-k');btn.className='btn btn-sm btn-sm-b';}document.querySelectorAll('#ord-list .order-card').forEach(c=>{const o=(state.orders||[]).find(x=>x.id===c.dataset.orderId);let show=f==='todas'||(f==='Em Atraso'?emAtraso(o):c.dataset.status===f);c.style.display=show?'block':'none';});};
+  function adicionarFiltroAtraso(){const box=document.querySelector('#t-ordens .fgap'); if(!box||box.querySelector('.filtro-atraso'))return; const b=document.createElement('button');b.className='btn btn-sm btn-sm-k filtro-atraso';b.textContent='Em Atraso';b.onclick=()=>filtOrd('Em Atraso',b);box.insertBefore(b,box.children[1]||null);}
+  const loadOrdBase=loadOrdens; loadOrdens=async function(){await loadOrdBase();adicionarFiltroAtraso();};
+
+  // Meta mensal persistida no banco. Mantém localStorage apenas como fallback de leitura.
+  let cfgLR={};
+  async function carregarCfg(){try{cfgLR=await fetch('/api/config').then(r=>r.json());}catch(e){cfgLR={};}}
+  function chaveMeta(d=new Date()){return 'lr_meta_'+d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');}
+  metaMes=function(d=new Date()){const k=chaveMeta(d);return {k,v:cfgLR[k]??localStorage.getItem(k)??'0'};};
+  editarMetaMes=async function(){const m=metaMes(),v=prompt('Meta do mês (R$):',m.v);if(v===null)return;let s=String(v).trim().replace(/R\$\s?/gi,'');if(s.includes(',')&&s.includes('.'))s=s.replace(/\./g,'').replace(',','.');else if(/,\d{1,2}$/.test(s))s=s.replace(',','.');else s=s.replace(/[,\.]/g,'');const n=Number(s);if(isNaN(n)||n<0){toast('Digite um valor válido');return;}try{await fetch('/api/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({[m.k]:String(n)})});cfgLR[m.k]=String(n);localStorage.setItem(m.k,String(n));loadPagamentos();loadRelatorio();toast('Meta salva no banco de dados');}catch(e){toast('Não foi possível salvar a meta');}};
+  const loadPagBase2=loadPagamentos; loadPagamentos=async function(){await carregarCfg();await loadPagBase2();const stats=document.getElementById('fin-stats');if(!stats)return;const os=(state.orders||[]).filter(o=>!ordemArquivada(o)),atraso=os.filter(o=>ordemConcluida(o)&&!pagamentoConfirmado(o)).length;const card=document.createElement('div');card.className='sc';card.innerHTML=`<div class="sc-num cr">${atraso}</div><div class="sc-lbl">Pagamentos em atraso</div>`;stats.appendChild(card);};
+
+  // Atalhos do painel inicial.
+  const dashAtalhos=()=>{const stats=document.querySelectorAll('#dash-stats .sc');if(stats[0]){stats[0].style.cursor='pointer';stats[0].onclick=()=>{tp('t-ordens');setTimeout(()=>filtOrd('Agendada'),0);};}if(stats[1]){stats[1].style.cursor='pointer';stats[1].onclick=()=>{tp('t-ordens');setTimeout(()=>filtOrd('Em Atraso'),0);};}document.querySelectorAll('#t-dash .sc').forEach(s=>{if((s.textContent||'').includes('Clientes'))s.onclick=()=>tp('t-clientes');if((s.textContent||'').includes('Lembretes'))s.onclick=()=>tp('t-lembretes');if((s.textContent||'').includes('Receita'))s.onclick=()=>tp('t-relatorio');});};
+  const dashboardLinksBase=loadDashboard; loadDashboard=async function(){await dashboardLinksBase();const cards=document.querySelectorAll('#dash-stats .sc');if(cards[0]){cards[0].querySelector('.sc-lbl').textContent='Ordens Agendadas';cards[0].onclick=()=>{tp('t-ordens');setTimeout(()=>filtOrd('Agendada'),0);};}if(cards[4]){cards[4].querySelector('.sc-lbl').textContent='Ordens Concluídas';cards[4].onclick=()=>{tp('t-ordens');setTimeout(()=>filtOrd('Concluída'),0);};}if(cards[5]){cards[5].querySelector('.sc-lbl').textContent='Ordens';cards[5].onclick=()=>tp('t-ordens');}const atraso=cards[2];if(atraso)atraso.onclick=()=>{tp('t-ordens');setTimeout(()=>filtOrd('Em Atraso'),0);};if(cards[1])cards[1].onclick=()=>tp('t-lembretes');if(cards[3])cards[3].onclick=()=>tp('t-clientes');const receita=document.querySelector('#dash-alerts .sc');if(receita){const l=receita.querySelector('.sc-lbl');if(l&&l.textContent.includes('Receita')){receita.onclick=()=>tp('t-relatorio');receita.style.cursor='pointer';}}};setTimeout(dashAtalhos,1200);
+  const relDbBase=loadRelatorio; loadRelatorio=async function(){await carregarCfg();await relDbBase();const card=document.querySelector('#rel-stats .sc:nth-child(3)');if(card){const m=metaMes();const num=card.querySelector('.sc-num');if(num)num.textContent='R$'+valorBR(m.v);card.onclick=editarMetaMes;card.style.cursor='pointer';}};
+  const style=document.createElement('style');style.textContent='.filtro-atraso{color:#c87979!important;border-color:#d9a0a0!important;}#t-limpezas .order-card{cursor:pointer;}#fin-stats .sc{min-width:0;}';document.head.appendChild(style);
+})();
+
+const dashboardFixBase=loadDashboard; loadDashboard=async function(){await dashboardFixBase();const cards=document.querySelectorAll('#dash-stats .sc');const ag=(state.orders||[]).filter(o=>statusAtual(o)==='Agendada').length;const pagas=(state.orders||[]).filter(o=>ordemConcluida(o)&&pagamentoConfirmado(o)).length;if(cards[0])cards[0].querySelector('.sc-num').textContent=ag;if(cards[4])cards[4].querySelector('.sc-num').textContent=pagas;};
 
 // init date
 // Atualização por gesto no celular: puxe a tela para baixo no topo da página.
